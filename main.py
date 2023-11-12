@@ -3,105 +3,158 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import imageio
 
-n = 30
+# Number of interior cells for each dimension
+n = 60
+# Space step
 h = 1 / (n+1)
 h2 = h*h
-k = 0.5*h
-maxt = 1
+# Time step
+k = 0.1*h
+
+# Full duration of simulation
+maxt = 0.1
+# Number of iterations
 frames = int(np.ceil(maxt / k))
 
-xs = np.linspace(h, 1-h, n)
-ys = np.linspace(h, 1-h, n)
+# xs - xcoords of cells
+# ys - ycoords of cells
+xs = np.linspace(0, 1, n+2)
+ys = np.linspace(0, 1, n+2)
 xs_mesh, ys_mesh = np.meshgrid(xs, ys)
-xs_mesh = xs_mesh.ravel()
-ys_mesh = ys_mesh.ravel()
+xs = xs_mesh.ravel()
+ys = ys_mesh.ravel()
 
-phi_star = 0.5
-omega = 1
+# Sigmoid translation terms
+phi_star = 0.7
+omega = 6.5
 
-phi = 0.5 * np.ones_like(xs_mesh) + 0.2 * np.random.random(size=n*n)
-p = np.zeros_like(xs_mesh)
+boundary = np.zeros((n+2,n+2))
+for i in range(-1,n+1):
+    # Everything moves outward
+    boundary[-1, i] = 1
+    boundary[ n, i] = 1
+    boundary[ i,-1] = 1
+    boundary[ i, n] = 1
+boundary *= 0.1
 
-#der_center = 1./(2*h) * (np.eye(n, k=1) - np.eye(n, k=-1))
-#der_forward = 1./h * (np.eye(n, k=1) - np.eye(n))
-#der_backward = 1./h * (np.eye(n) - np.eye(n, k=-1))
+# Solid material density
+phi = 0.8 * np.ones((n+2, n+2)) + 0.02 * np.random.random(size=(n+2, n+2))
+# Pressure field
+p = np.zeros((n+2, n+2))
 
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))
 
 def source(t):
-    #s = []
-    #for i in range(n):
-    #    for j in range(n):
-    #        s.append(0.1)
-    s = 0.01 * np.ones(n*n)
+    #s = 0.01 * np.ones((n+2,n+2))
+    #s = 0.01 * np.ones((n,n))
+    s = np.zeros((n,n))
+    low = int(n/3)
+    high = int(2*n/3)
+    s[low:high,low:high] = 0.1
     return np.array(s)
 
 times = []
 imgs = []
 t = 0
 while t < maxt:
+    t += k
+
     print("TIME", t)
 
-    #"""
-    # Update the phi stuff
-    dp2 = np.zeros_like(xs_mesh)
-    for i in range(n):
-        for j in range(n):
-            curr_i = i*n+j
-            dpdx, dpdy = 0,0
-            if i != 0: dpdy -= p[(i-1)*n+j]/2
-            if i != n-1: dpdy += p[(i+1)*n+j]/2
-            if j != 0: dpdx -= p[i*n+(j-1)]/2
-            if j != n-1: dpdx += p[i*n+(j+1)]/2
-            dp2[curr_i] = (dpdx*dpdx + dpdy*dpdy) / h2
-
-    psi = sigmoid(omega * (phi - phi_star))
-
-    dphidt = np.multiply(phi, np.maximum(0, dp2 - psi))
-    print(np.max(dp2), np.max(psi))
-    phi -= k * dphidt
-    #"""
-
-    #"""
     # Permeability
     kappa = np.divide(np.power(1-phi, 3), np.power(phi, 2))
-    dkappady = np.zeros_like(kappa)
+    print("Max kappa", np.max(np.abs(kappa)))
     dkappadx = np.zeros_like(kappa)
+    dkappady = np.zeros_like(kappa)
     for i in range(n):
         for j in range(n):
-            curr_i = i*n+j
-            if i != 0: dkappady[curr_i] -= kappa[(i-1)*n+j]/2
-            if i != n-1: dkappady[curr_i] += kappa[(i+1)*n+j]/2
-            if j != 0: dkappadx[curr_i] -= kappa[i*n+(j-1)]/2
-            if j != n-1: dkappadx[curr_i] += kappa[i*n+(j+1)]/2
+            dkappadx[i,j] += (kappa[  i,j+1] - kappa[  i,j-1])/(2*h)
+            dkappady[i,j] += (kappa[i+1,  j] - kappa[i-1,  j])/(2*h)
 
+    #"""
     # Solve the steady-state fluid eq
-    s = source(t)
+    s = source(t).ravel()
     laplacian = np.zeros((n*n, n*n))
     for i in range(n):
         for j in range(n):
             curr_i = i*n+j
-            laplacian[curr_i][curr_i] += 4*kappa[curr_i]
-            if i != 0: laplacian[curr_i][(i-1)*n+j] -= kappa[curr_i]
-            if i != n-1: laplacian[curr_i][(i+1)*n+j] -= kappa[curr_i]
-            if j != 0: laplacian[curr_i][i*n+(j-1)] -= kappa[curr_i]
-            if j != n-1: laplacian[curr_i][i*n+(j+1)] -= kappa[curr_i]
+            laplacian[curr_i][curr_i] += 4*kappa[i,j]
+            if i != 0:   laplacian[curr_i][(i-1)*n+    j] -= kappa[i,j]
+            if i != n-1: laplacian[curr_i][(i+1)*n+    j] -= kappa[i,j]
+            if j != 0:   laplacian[curr_i][    i*n+(j-1)] -= kappa[i,j]
+            if j != n-1: laplacian[curr_i][    i*n+(j+1)] -= kappa[i,j]
 
-            if i != 0: laplacian[curr_i][(i-1)*n+j] -= dkappady[curr_i]/2
-            if i != n-1: laplacian[curr_i][(i+1)*n+j] += dkappady[curr_i]/2
-            if j != 0: laplacian[curr_i][i*n+(j-1)] -= dkappadx[curr_i]/2
-            if j != n-1: laplacian[curr_i][i*n+(j+1)] += dkappadx[curr_i]/2
+            if i != 0:   laplacian[curr_i][(i-1)*n+    j] -= dkappady[i,j]/(2*h2)
+            if i != n-1: laplacian[curr_i][(i+1)*n+    j] += dkappady[i,j]/(2*h2)
+            if j != 0:   laplacian[curr_i][    i*n+(j-1)] -= dkappadx[i,j]/(2*h2)
+            if j != n-1: laplacian[curr_i][    i*n+(j+1)] += dkappadx[i,j]/(2*h2)
 
-    laplacian /= h2
-    p = np.dot(np.linalg.inv(laplacian), s)
+    laplacian_inv = np.linalg.inv(laplacian)
+    p[:n,:n] = np.dot(laplacian_inv, s).reshape((n,n))
+    for i in range(n):
+        # Max because negative pressures don't make sense
+        # TODO: Using inner kappas, not those on the boundary
+        #p[  i, -1] = np.max([0, p[  i,  0] - (boundary[  i, -1] / kappa[  i,  0])])
+        #p[  i,  n] = np.max([0, p[  i,n-1] - (boundary[  i,  n] / kappa[  i,n-1])])
+        #p[ -1,  i] = np.max([0, p[  0,  i] - (boundary[ -1,  i] / kappa[  0,  i])])
+        #p[  n,  i] = np.max([0, p[n-i,  i] - (boundary[  n,  i] / kappa[n-i,  i])])
+        p[  i, -1] = p[  i,  0] - (boundary[  i, -1] / kappa[ i,-1]) * h
+        p[  i,  n] = p[  i,n-1] - (boundary[  i,  n] / kappa[ i, n]) * h
+        p[ -1,  i] = p[  0,  i] - (boundary[ -1,  i] / kappa[-1, i]) * h
+        p[  n,  i] = p[n-1,  i] - (boundary[  n,  i] / kappa[ n, i]) * h
+        #p[  i, -1] = p[  i,  0] - (boundary[  i, -1])
+        #p[  i,  n] = p[  i,n-1] - (boundary[  i,  n])
+        #p[ -1,  i] = p[  0,  i] - (boundary[ -1,  i])
+        #p[  n,  i] = p[n-i,  i] - (boundary[  n,  i])
+    #p[-1,-1] = p[  0,  0] - (boundary[-1,-1] / kappa[  0,  0])
+    #p[-1, n] = p[  0,n-1] - (boundary[-1, n] / kappa[  0,n-1])
+    #p[ n,-1] = p[n-1,  0] - (boundary[ n,-1] / kappa[n-1,  0])
+    #p[ n, n] = p[n-1,n-1] - (boundary[ n, n] / kappa[n-1,n-1])
     #"""
 
-    t += k
+
+    # Update the phi stuff
+    dp2 = np.zeros_like(p)
+    #"""
+    for i in range(n):
+        for j in range(n):
+            dpdx = (p[  i,j+1] - p[  i,j-1])/2
+            dpdy = (p[i+1,  j] - p[i-1,  j])/2
+            dp2[i,j] = (dpdx*dpdx + dpdy*dpdy) / h2
+
+    # Boundary flux of p is given by the boundary
+    for i in range(n):
+        # TODO: Using inner kappas, not those on the boundary
+        #dp2[ i,-1] = (boundary[ i,-1]) ** 2
+        #dp2[ i, n] = (boundary[ i, n]) ** 2
+        #dp2[-1, i] = (boundary[-1, i]) ** 2
+        #dp2[ n, i] = (boundary[ n, i]) ** 2
+        dp2[ i,-1] = (boundary[ i,-1] / kappa[ i,-1]) ** 2
+        dp2[ i, n] = (boundary[ i, n] / kappa[ i, n]) ** 2
+        dp2[-1, i] = (boundary[-1, i] / kappa[-1, i]) ** 2
+        dp2[ n, i] = (boundary[ n, i] / kappa[ n, i]) ** 2
+    #dp2[-1,-1] = 0.5 * (boundary[-1,-1] / kappa[  0,  0]) ** 2
+    #dp2[-1, n] = 0.5 * (boundary[-1, n] / kappa[  0,n-1]) ** 2
+    #dp2[ n,-1] = 0.5 * (boundary[ n,-1] / kappa[n-1,  0]) ** 2
+    #dp2[ n, n] = 0.5 * (boundary[ n, n] / kappa[n-1,n-1]) ** 2
+    #"""
+
+    psi = sigmoid(omega * (phi - phi_star))
+
+    dphidt = np.multiply(phi, np.maximum(0, dp2 - psi))
+    #dphidt = np.multiply(phi, dp2 - psi)
+    phi -= k * dphidt
+
 
     times.append(t)
-    imgs.append(phi.reshape((n,n)))
-    #imgs.append(dp2.reshape((n,n)))
+    #imgs.append(phi[:n,:n].reshape((n,n)))
+    #imgs.append(kappa.reshape((n+2,n+2)))
+    #imgs.append(kappa[:n,:n].reshape((n,n)))
+    #imgs.append(dphidt[:n,:n].reshape((n,n)))
+    #imgs.append(p[:n,:n].reshape((n,n)))
+    imgs.append(dp2[:n,:n].reshape((n,n)))
+    #imgs.append(dphidt[:n,:n].reshape((n,n)))
 
 #plt.imshow(phi.reshape((n,n)))
 #plt.colorbar()
