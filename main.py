@@ -14,31 +14,32 @@ a, b = 0, 1             # Range of simulation
 
 omega = 6.5             # Ground stiffness
 phi_star = 0.70         # Erosive concentration thres
-phi_zero = 0.80         # Initial concentration value
+phi_zero = 0.75         # Initial concentration value
 max_t =  5              # Time before sim restart
-zeta = 4                # Concentration of noise field
-sigma_phi = 2.5         # Amplitude of noise field
+zeta = 2                # Concentration of noise field
+sigma_phi = 0.20        # Amplitude of noise field
 xi = 1                  # Std of correlation kernel
 
-red_inte_eps = 1e-3     # Regularization for pressure
-erosion_thres = 0.0     # Parameter to threshold the max term in dphi
+red_inte_eps = 1e-5     # Regularization for pressure
+erosion_thres = -0.0    # Parameter to threshold the max term in dphi
+erosion_mul = 1.0       # Parameter in maximum (multiplicative)
 n_blur_width = 3        # Cell width to do correlation with
 
 # Von Neumann BCs
 boundary = np.zeros((n+2, n+2))
-boundary[-1, 70:75] = -1 # Top
-boundary[ n, 70:75] = 1 # Bottom
-boundary[ :,-1] = 0 # Left
-boundary[ :, n] = 0 # Right
+boundary[-1, 48:52] = 1 # Top
+boundary[ n, 48:52] = 1 # Bottom
+boundary[ 48:52,-1] = 1 # Left
+boundary[ 48:52, n] = -1 # Right
 
 # Internal Fluid Source
 sources = np.zeros((n,n))
-sources[:,:] = 0.0
+sources[:,:] = -0.1
 #sources[40:60,40:60] = 1
 
 # Derived params
 h = (b-a) / (n+2)
-k = 0.5*h
+k = 0.2*h
 
 # Plotting coordinates
 xs = np.linspace(0+h, 1-h, n)
@@ -73,20 +74,20 @@ def get_dp2(p):
     idx_backward = np.arange(n) - 1
 
     # Forward difference * Backward difference
-    #"""
+    """
     dpdx  = (p[:n, idx_forward] - p[:n, idx_current])  / (h)
     dpdx *= (p[:n, idx_current] - p[:n, idx_backward]) / (h)
     dpdy  = (p[idx_forward, :n] - p[idx_current, :n])  / (h)
     dpdy *= (p[idx_current, :n] - p[idx_backward, :n]) / (h)
-    #"""
+    """
 
     # Centered difference squared
-    """
+    #"""
     dpdx  = (p[:n, idx_forward] - p[:n, idx_backward]) / (2*h)
     dpdx *= (p[:n, idx_forward] - p[:n, idx_backward]) / (2*h)
     dpdy  = (p[idx_forward, :n] - p[idx_backward, :n]) / (2*h)
     dpdy *= (p[idx_forward, :n] - p[idx_backward, :n]) / (2*h)
-    """
+    #"""
 
     dp2 = np.square(boundary) # Boundary gradients are given
     dp2[:n,:n] = dpdx + dpdy  # Core gradients are calculated
@@ -116,7 +117,7 @@ def dphidt(phi, p):
     other_phi = convolve2d(other_phi, kernel, boundary="symm", mode="same")
     #"""
 
-    return phi * np.maximum(0, dp2 - psi(other_phi) - erosion_thres)
+    return phi * np.maximum(0, dp2 - erosion_mul * psi(other_phi) - erosion_thres)
 
 def get_source():
     source = boundary.copy() # Boundary conditions
@@ -361,9 +362,9 @@ def init():
 
     # Random Gaussian Spots
     #"""
-    phi = np.ones((n+2, n+2)) * phi_zero
+    phi = np.zeros((n+2, n+2))
     #for itr in range(int(n*n/10)):
-    for itr in range(int(n)):
+    for itr in range(int(n*n)):
         xs = np.arange(n+2)
         xs[-1] -= n+2
         ys = np.arange(n+2)
@@ -373,7 +374,10 @@ def init():
         mu = np.random.uniform(-1, n+1, 2)
         dists = (mu[0] - xs)**2 + (mu[1] - ys)**2
 
-        phi += sigma_phi/n * np.sqrt(2*np.pi/zeta) * np.exp(-dists/(2 * zeta**2))
+        phi += np.sqrt(2*np.pi/zeta) * np.exp(-dists/(2 * zeta**2))
+    phi_min = np.min(phi)
+    phi_max = np.max(phi)
+    phi = phi_zero + sigma_phi * ((phi - phi_min) / (phi_max - phi_min))
     #"""
 
     return fig,
@@ -382,7 +386,7 @@ def update(frame):
     global phi, t
     # Show current frame
     ax.cla()
-    ax.imshow(phi[:n,:n], vmin=0.2, vmax=0.8)
+    ax.imshow(phi[:n,:n], vmin=0.2, vmax=0.9, cmap='binary')
     #ax.imshow(phi[:n,:n])
 
     # Time update
@@ -415,7 +419,10 @@ def update(frame):
     #ax.imshow(psi(phi))
     #ax.imshow(p[:n,:n])
     #ax.imshow(get_dp2(p)[:n,:n])
-    print(np.max(p[:n,:n])-np.min(p[:n,:n]),np.max(p[:n,:n]),np.min(p[:n,:n]))
+
+    dp2 = get_dp2(p)
+    print(np.min(dp2[:n,:n]), np.max(dp2[:n,:n]))
+    #print(np.max(p[:n,:n])-np.min(p[:n,:n]),np.max(p[:n,:n]),np.min(p[:n,:n]))
 
     # Restart after enough time (aesthetic)
     if t > max_t:
