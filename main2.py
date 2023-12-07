@@ -1,4 +1,4 @@
-# FINITE VOLUMNE METHODS
+# FINITE VOLUME METHODS
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -11,48 +11,53 @@ import pypardiso
 
 ### PARAMETERS ###
 
-n = 100           # Grid points
-a, b = 0, 1       # Box edges
+n = 100
+a, b = 0, 1
 
-h = 1./(n+2)      # Space interval
-h2 = h*h 
+h = 1./(n+2)
+h2 = h*h
 
-k = h             # Time interval
-save_interval = 0.1 # Frequency to save images
-max_t = 10        # Time value before termination
+k = 0.25 * h
+save_interval = 0.25
+max_t = 5
 
-e0 = 1.0           # Erosion Rate
-d0 = 1.0           # Deposition Rate
+e0 = 1.0
+d0 = 1.0
+gamma = 20.0
 
-c0 = 0.0          # Minimum sigma value
-c1 = 1.0          # Maximum sigma value
-omega = 6.5       # Erosive sharpness
-phi_star = 0.70   # Erosion threshold
+omega = 2 * np.pi
+d_phi_star = 0.70
+e_phi_star = 0.70
 
-phi_min  = 0.75   # Minimum initial phi_s value
-phi_max  = 0.80   # Maximum initial phi_s value
-zeta = 0.01       # Width of correlation of initial heat field
+phi_s_min  = 0.70
+phi_s_max  = 0.90
+zeta = 0.01
 
-n_blur_width = 25 # Cell width to have convolution template on
-xi = 10           # Cell width of convolution std
+n_blur_width = 25
+xi = 4
 
-max_decay = 0.9   # Threshold value on erosion (stop-gap measure)
+max_decay = 0.9 # Totally a stop-gap measure
 
 source = np.zeros((n,n))
 
 # Boundary terms
 boundary = np.zeros((n+2,n+2))
-boundary[0,1:n+1]   = 0 
-boundary[n+1,1:n+1] = 0
-boundary[1:n+1,0]   = 0
-boundary[1:n+1,n+1] = 0
 
+# Edges
 #boundary[48:52,n+1] = -3
-boundary[0,:] = -3/25
-boundary[n+1,:] = 3/25
+boundary[0,:] = -0.1
+#boundary[:,0] = 2./5
+boundary[n+1,:] = 0.1
+#boundary[:,n+1] = 2./5
 #boundary[0,48:52] = -3
-#boundary[n+1,48:52] = 3
+#boundary[n+1,48:52] = 10
 #boundary[48:52,0] = 3
+
+# Corners
+boundary[0,0] = 0
+boundary[n+1,0] = 0
+boundary[0,n+1] = 0
+boundary[n+1,n+1] = 0
 
 # Indexing dictionaries
 ij2idx = {}
@@ -74,28 +79,39 @@ xs_mesh, ys_mesh = np.meshgrid(xs, ys)
 def s():
     global t
     s = (t / max_t) * boundary.copy()
+    #s = boundary.copy()
     s[1:n+1,1:n+1] = source
     s_lagrange = np.zeros((n+2)*(n+2)+1)
     s_lagrange[:-1] = s.ravel()
     return s_lagrange
 
 def kappa(phi):
-    return ((1-phi) ** 3) / (phi ** 2)
+    return (phi ** 3) / ((1 - phi) ** 2)
 
 def dp2(p):
-    dpdx = (p[:,2:] - p[:,:-2]) / (2*h)
-    dpdy = (p[2:,:] - p[:-2,:]) / (2*h)
+    """
+    dpdx  = (p[:,2:] - p[:,1:-1]) / (h)
+    dpdx *= (p[:,1:-1] - p[:,:-2]) / (h)
+    dpdy  = (p[2:,:] - p[1:-1,:]) / (h)
+    dpdy *= (p[1:-1,:] - p[:-2,:]) / (h)
     dp = np.square(boundary)
-    dp[:,1:-1] += np.square(dpdx)
-    dp[1:-1,:] += np.square(dpdy)
-    return dp
+    dp[:,1:-1] += np.abs(dpdx)
+    dp[1:-1,:] += np.abs(dpdy)
+    """
 
-def gradp(p):
-    return np.sqrt(p)
+    #"""
+    dpdx  = (p[:,2:] - p[:,:-2]) / (2*h)
+    dpdx *= (p[:,2:] - p[:,:-2]) / (2*h)
+    dpdy  = (p[2:,:] - p[:-2,:]) / (2*h)
+    dpdy *= (p[2:,:] - p[:-2,:]) / (2*h)
+    dp = np.square(boundary)
+    dp[:,1:-1] += dpdx
+    dp[1:-1,:] += dpdy
+    #"""
+    return dp
 
 def sigma(phi):
     global omega
-    other_phi = phi 
 
     xs = np.arange(2*n_blur_width+1)
     ys = np.arange(2*n_blur_width+1)
@@ -106,31 +122,35 @@ def sigma(phi):
     kernel = np.exp(-dists/(2*xi)) # Make local Gaussian kernel
     kernel /= np.sum(kernel)
 
-    other_phi = convolve2d(other_phi, kernel, boundary="symm", mode="same")
+    other_phi = convolve2d(phi, kernel, boundary="symm", mode="same")
 
-    return c0 + (c1-c0) * (0.5 * np.tanh(omega * (other_phi - phi_star)) + 0.5)
-
-
-
-# Return q = phi * u
-def flux(phi, p):
-    return -kappa(phi) * gradp(p)
+    return 0.5 * (np.tanh(omega * (other_phi - e_phi_star)) + 1)
 
 def e(phi_s, phi_g, p):
-    return e0 * phi_s * np.maximum(0, dp2(p) - sigma(phi_s))
+    return phi_s * np.minimum(max_decay, e0 * np.maximum(0, dp2(p) / gamma - sigma(phi_s)))
 
 def d(phi_s, phi_g, p):
-    return d0 * phi_g * np.maximum(0, phi_s - phi_star)
+    return phi_g * np.minimum(max_decay, d0 * np.maximum(0, phi_s - d_phi_star))
 
 def dphi_s_dt(phi_s, phi_g, p):
-    #ret = d(phi_s, phi_g, p) - e(phi_s, phi_g, p)
+    dd = d(phi_s, phi_g, p)
+    ee = e(phi_s, phi_g, p)
+    #print(np.min(dd), np.max(dd))
+    #print(np.min(ee), np.max(ee))
+    #print(np.min(dp2(p)), np.max(dp2(p)))
+    #print()
+
+    #ret = np.zeros_like(phi_s)
     ret = - e(phi_s, phi_g, p)
+    #ret = d(phi_s, phi_g, p) - e(phi_s, phi_g, p)
     return np.nan_to_num(ret, nan=0.0)
 
 def dphi_g_dt(phi_s, phi_g, p):
-    #ret = e(phi_s, phi_g, p) - d(phi_s, phi_g, p) - apply_A(phi_g, p)
+    ret = np.zeros_like(phi_s)
     ret = e(phi_s, phi_g, p)
+    #ret = e(phi_s, phi_g, p) - d(phi_s, phi_g, p) - apply_A(phi_g, p)
     return np.nan_to_num(ret, nan=0.0)
+
 
 
 def A(phi, do_lagrange=True):
@@ -164,6 +184,7 @@ def A(phi, do_lagrange=True):
             if 1 <= j and j <= n:
 
                 # Core
+                #"""
                 flow_down  = (kappa(phi[i,j]) + kappa(phi[i-1,j])) / 2
                 flow_up    = (kappa(phi[i,j]) + kappa(phi[i+1,j])) / 2
                 flow_left  = (kappa(phi[i,j]) + kappa(phi[i,j-1])) / 2
@@ -174,6 +195,15 @@ def A(phi, do_lagrange=True):
                         flow_right / h2, \
                         flow_down / h2, \
                         flow_up / h2]
+                #"""
+
+                """
+                data = [(-4*kappa(phi[i,j])) / h2, \
+                        (kappa(phi[i,j]) + 0.25 * kappa(phi[i, j-1]) - 0.25 * kappa(phi[i, j+1])) / h2, \
+                        (kappa(phi[i,j]) + 0.25 * kappa(phi[i, j+1]) - 0.25 * kappa(phi[i, j-1])) / h2, \
+                        (kappa(phi[i,j]) + 0.25 * kappa(phi[i-1, j]) - 0.25 * kappa(phi[i+1, j])) / h2, \
+                        (kappa(phi[i,j]) + 0.25 * kappa(phi[i+1, j]) - 0.25 * kappa(phi[i-1, j])) / h2]
+                """
 
                 row = [i, i, i, i-1, i+1]
                 col = [j, j-1, j+1, j, j]
@@ -213,13 +243,12 @@ def A(phi, do_lagrange=True):
             arr_data.append(1)
             arr_row.append(ij2idx[i,j])
             arr_col.append((n+2)*(n+2))
-
+    
             arr_data.append(1)
             arr_row.append((n+2)*(n+2))
             arr_col.append(ij2idx[i,j])
 
-    # Lagrange
-    n2 = (n+2)*(n+2)
+    n2 = (n+2) * (n+2)
     if do_lagrange:
         n2 += 1
     row, col, data = np.array(arr_row), np.array(arr_col), np.array(arr_data)
@@ -228,11 +257,10 @@ def A(phi, do_lagrange=True):
     return arr
 
 def apply_A(phi, x):
-    return (A(phi, do_lagrange=False) * x.ravel()).reshape((n+2),(n+2))
+    return (A(phi, do_lagrange=False) * x.ravel()).reshape((n+2,n+2))
 
 def p(phi):
     return pypardiso.spsolve(A(phi), s())[:-1].reshape((n+2,n+2))
-    #return sp.spsolve(A(phi), s())[:-1].reshape((n+2,n+2))
 
 
 
@@ -261,26 +289,24 @@ def init():
 
     t = 0
 
-    # Set up the unmoving component
-    phi_s = np.zeros((n+2,n+2))
+    phi = np.zeros((n+2,n+2))
     for itr in range(int(n*n)):
         xs = h * np.arange(n+2)
         ys = h * np.arange(n+2)
         xs, ys = np.meshgrid(xs, ys)
 
-        mu = np.random.uniform(-h, 1+h, 2)
+        mu = np.random.uniform(-2*zeta, 1+2*zeta, 2)
         dists = (mu[0] - xs)**2 + (mu[1] - ys)**2
 
-        phi_s += np.sqrt(2*np.pi/zeta) * np.exp(-dists/(2 * zeta**2))
-    phi_top = np.min(phi_s)
-    phi_bot = np.max(phi_s)
-    phi_s = phi_min + (phi_max - phi_min) * ((phi_s - phi_bot) / (phi_top - phi_bot))
+        phi += np.sqrt(2*np.pi/zeta) * np.exp(-dists/(2 * zeta**2))
+    phi_top = np.min(phi)
+    phi_bot = np.max(phi)
 
-    # Originally, nothing is moving
-    phi_g = np.zeros((n+2,n+2))
+    phi_s = phi_s_min + (phi_s_max - phi_s_min) * ((phi - phi_bot) / (phi_top - phi_bot))
+    phi_g = np.zeros_like(phi_s)
+    phi_l = 1-phi_s-phi_g
 
-    # Because everything sums to 1
-    phi_l = 1 - phi_s - phi_g
+    print(np.min(phi_s), np.max(phi_s))
 
 
 def update(frame):
@@ -294,94 +320,99 @@ def update(frame):
         axs[1,1].cla()
         axs[1,2].cla()
     
+        # RK4 Updates
         phi_s1 = phi_s
         phi_g1 = phi_g
         phi_l1 = phi_l
         curr_p = p(phi_g1 + phi_l1)
-        #print(curr_p)
         k_s1 = dphi_s_dt(phi_s1, phi_g1, curr_p)
         k_g1 = dphi_g_dt(phi_s1, phi_g1, curr_p)
-        k_l1 = -(k_s1 + k_g1)
-    
-        phi_s2 = phi_s + k*k_s1/2
-        phi_g2 = phi_g + k*k_g1/2
-        phi_l2 = phi_l + k*k_l1/2
+        k_l1 = -k_s1-k_g1
+
+        phi_s2 = phi_s + k_s1/2
+        phi_g2 = phi_g + k_g1/2
+        phi_l2 = phi_l + k_l1/2
         curr_p = p(phi_g2 + phi_l2)
-        #print(curr_p)
-        k_s2 = dphi_s_dt(phi_g2, phi_s2, curr_p)
-        k_g2 = dphi_g_dt(phi_g2, phi_s2, curr_p)
-        k_l2 = -(k_s2 + k_g2)
-    
-        phi_s3 = phi_s + k*k_s2/2
-        phi_g3 = phi_g + k*k_g2/2
-        phi_l3 = phi_l + k*k_l2/2
+        k_s2 = dphi_s_dt(phi_s2, phi_g2, curr_p)
+        k_g2 = dphi_g_dt(phi_s2, phi_g2, curr_p)
+        k_l2 = -k_s2-k_g2
+
+        phi_s3 = phi_s + k_s2/2
+        phi_g3 = phi_g + k_g2/2
+        phi_l3 = phi_l + k_l2/2
         curr_p = p(phi_g3 + phi_l3)
-        k_s3 = dphi_s_dt(phi_g3, phi_s3, curr_p)
-        k_g3 = dphi_g_dt(phi_g3, phi_s3, curr_p)
-        k_l3 = -(k_s3 + k_g3)
-    
-        phi_s4 = phi_s + k*k_s3
-        phi_g4 = phi_g + k*k_g3
-        phi_l4 = phi_l + k*k_l3
+        k_s3 = dphi_s_dt(phi_s3, phi_g3, curr_p)
+        k_g3 = dphi_g_dt(phi_s3, phi_g3, curr_p)
+        k_l3 = -k_s3-k_g3
+
+        phi_s4 = phi_s + k_s3
+        phi_g4 = phi_g + k_g3
+        phi_l4 = phi_l + k_l3
         curr_p = p(phi_g4 + phi_l4)
-        k_s4 = dphi_s_dt(phi_g4, phi_s4, curr_p)
-        k_g4 = dphi_g_dt(phi_g4, phi_s4, curr_p)
-        k_l4 = -(k_s4 + k_g4)
-    
-        phi_s += k * (k_s1 + 2*k_s2 + 2*k_s3 + k_s4) / 6
-        phi_g += k * (k_g1 + 2*k_g2 + 2*k_g3 + k_g4) / 6
-        phi_l += k * (k_l1 + 2*k_l2 + 2*k_l3 + k_l4) / 6
+        k_s4 = dphi_s_dt(phi_s4, phi_g4, curr_p)
+        k_g4 = dphi_g_dt(phi_s4, phi_g4, curr_p)
+        k_l4 = -k_s4-k_g4
+
+        # Change the state of the system
+        dphi_s = (k_s1 + 2 * k_s2 + 2 * k_s3 + k_s4) / 6
+        dphi_g = (k_g1 + 2 * k_g2 + 2 * k_g3 + k_g4) / 6
+        dphi_l = (k_l1 + 2 * k_l2 + 2 * k_l3 + k_l4) / 6
+
+        phi_s += k * dphi_s
+        phi_g += k * dphi_g
+        phi_l += k * dphi_l
+
+        print("System sum:", np.sum(phi_s + phi_g + phi_l - 1))
     
         t += k
     
-    # PLOTTING #
-    fig.suptitle("t = %.5f" % t)
+        # PLOTTING #
+        fig.suptitle("t = %.5f" % t)
     
-    axs[0,0].imshow(phi_s, vmin=0.2, vmax=0.9, cmap='binary')
-    axs[0,0].set_title("$\phi$")
+        axs[0,0].imshow(phi_s, vmin=0.2, vmax=0.9, cmap='binary')
+        axs[0,0].set_title("$\phi_s$")
     
-    axs[0,1].imshow(s()[:-1].reshape((n+2,n+2)))
-    axs[0,1].set_title("s")
+        axs[0,1].imshow(s()[:-1].reshape((n+2,n+2)))
+        axs[0,1].set_title("s")
     
-    axs[0,2].plot_surface(xs_mesh, ys_mesh, curr_p)
-    #axs[0,2].imshow(curr_p)
-    axs[0,2].set_title("$p$")
+        axs[0,2].plot_surface(xs_mesh, ys_mesh, curr_p)
+        #axs[0,2].imshow(curr_p)
+        axs[0,2].set_title("$p$")
     
-    #axs[1,0].imshow(kappa(phi_s) * np.sqrt(dp2(curr_p)))
-    #axs[1,0].set_title(r"$|\kappa(\phi)\nabla p|$")
-    axs[1,0].imshow(np.sqrt(dp2(curr_p)))
-    axs[1,0].set_title(r"$|\nabla p|$")
+        axs[1,0].imshow(np.sqrt(dp2(curr_p)))
+        axs[1,0].set_title(r"$|\nabla p|$")
+        #axs[1,0].imshow(kappa(phi_s) * np.sqrt(dp2(curr_p)))
+        #axs[1,0].set_title(r"$|\kappa(\phi_s)\nabla p|$")
     
-    #axs[1,1].imshow((k_s1 + 2*k_s2 + 2*k_s3 + k_s4) / 6)
-    #axs[1,1].set_title("$\partial_t \phi$")
+        axs[1,1].imshow(dphi_s)
+        axs[1,1].set_title("$\partial_t \phi_s$")
     
-    axs[1,2].imshow(sigma(phi_s))
-    axs[1,2].set_title("$\sigma$")
-
-    #print(np.min(k_s1), np.max(k_s1), t)
-    #print(np.min(k_g1), np.max(k_g1))
-    print()
+        axs[1,2].imshow(sigma(phi_s))
+        axs[1,2].set_title("$\sigma$")
     
-    # Save plots
-    if t - np.floor(t/save_interval)*save_interval < k:
-        index = 0
-        files = os.listdir(itr_dir)
-        while "fig%d.png" % index in files:
-            index += 1
-        plt.savefig(itr_dir + "/fig%d.png" % index)
+        print(np.min(dphi_s), np.max(dphi_s), t)
     
-    # Restart after enough time (aesthetic)
-    if t > max_t:
-        itr_index += 1
-        itr_dir = "img/itr%d" % itr_index
-        os.mkdir(itr_dir)
-        init()
+        # Save plots
+        if t - np.floor(t/save_interval)*save_interval < k:
+            index = 0
+            files = os.listdir(itr_dir)
+            while "fig%d.png" % index in files:
+                index += 1
+            plt.savefig(itr_dir + "/fig%d.png" % index)
+    
+        # Restart after enough time (aesthetic)
+        if t > max_t:
+            itr_index += 1
+            itr_dir = "img/itr%d" % itr_index
+            os.mkdir(itr_dir)
+            init()
     return fig,
 
 
-ani = anim.FuncAnimation(fig, update, init_func=init, save_count=200)
+ani = anim.FuncAnimation(fig, update, init_func=init, save_count=400)
 ani.save(itr_dir + "/anim.mp4")
 #plt.show() 
+
 
 
 
