@@ -6,13 +6,16 @@ import matplotlib.animation as anim
 import scipy.sparse.linalg as sp
 from scipy.sparse import csr_matrix
 from scipy.signal import convolve2d
+import json
 import os
 import pypardiso
 
+#np.set_printoptions(precision=4)
+
 ### PARAMETERS ###
 
-n = 100
-a, b = 0, 1
+n = 200
+a, b = 0, 2
 
 h = 1./(n+2)
 h2 = h*h
@@ -29,12 +32,12 @@ omega = 2 * np.pi
 d_phi_star = 0.70
 e_phi_star = 0.70
 
-phi_s_min  = 0.70
+phi_s_min  = 0.80
 phi_s_max  = 0.90
 zeta = 0.01
 
 n_blur_width = 25
-xi = 4
+xi = 2
 
 max_decay = 0.9 # Totally a stop-gap measure
 
@@ -45,9 +48,9 @@ boundary = np.zeros((n+2,n+2))
 
 # Edges
 #boundary[48:52,n+1] = -3
-boundary[0,:] = -0.1
+boundary[0,:] = -0.2
 #boundary[:,0] = 2./5
-boundary[n+1,:] = 0.1
+boundary[n+1,:] = 0.2
 #boundary[:,n+1] = 2./5
 #boundary[0,48:52] = -3
 #boundary[n+1,48:52] = 10
@@ -141,19 +144,26 @@ def dphi_s_dt(phi_s, phi_g, p):
     #print()
 
     #ret = np.zeros_like(phi_s)
-    ret = - e(phi_s, phi_g, p)
-    #ret = d(phi_s, phi_g, p) - e(phi_s, phi_g, p)
+    #ret = - e(phi_s, phi_g, p)
+    ret = d(phi_s, phi_g, p) - e(phi_s, phi_g, p)
     return np.nan_to_num(ret, nan=0.0)
 
 def dphi_g_dt(phi_s, phi_g, p):
-    ret = np.zeros_like(phi_s)
-    ret = e(phi_s, phi_g, p)
-    #ret = e(phi_s, phi_g, p) - d(phi_s, phi_g, p) - apply_A(phi_g, p)
+    phi = 1-phi_s # 1-psi_s = psi_g + psi_l
+    #ret = np.zeros_like(phi_s)
+    #ret = e(phi_s, phi_g, p)
+    #ret = e(phi_s, phi_g, p) - d(phi_s, phi_g, p)
+    #ret = (e(phi_s, phi_g, p) - d(phi_s, phi_g, p)) / 2
+    #ret = e(phi_s, phi_g, p) - d(phi_s, phi_g, p) - apply_A(kappa(phi), p)
+    ret = e(phi_s, phi_g, p) - d(phi_s, phi_g, p) + apply_A(kappa(phi), p) / 2
+    #ret = e(phi_s, phi_g, p) - d(phi_s, phi_g, p) - apply_A(kappa(phi), p) / 2
+    #ret = e(phi_s, phi_g, p) - d(phi_s, phi_g, p) + np.abs(apply_A(phi_g / phi * kappa(phi), p))
+    #ret = e(phi_s, phi_g, p) - d(phi_s, phi_g, p) - apply_A(phi_g / phi * kappa(phi), p)
     return np.nan_to_num(ret, nan=0.0)
 
 
 
-def A(phi, do_lagrange=True):
+def A(kappa_phi, do_lagrange=True):
     arr_data, arr_row, arr_col = [], [], []
 
     for (i,j) in ij2idx.keys():
@@ -165,7 +175,8 @@ def A(phi, do_lagrange=True):
                 col = [0, 1, 0]
             if 1 <= j and j <= n:
                 # Edge
-                flow = (kappa(phi[0,j]) + kappa(phi[1,j])) / 2
+                flow = (kappa_phi[0,j] + kappa_phi[1,j]) / 2
+                #flow = kappa_phi[0,j]
                 data = [flow/h, -flow/h]
                 row = [0, 1]
                 col = [j, j]
@@ -177,7 +188,8 @@ def A(phi, do_lagrange=True):
         if 1 <= i and i <= n:
             if j == 0:
                 # Edge
-                flow = (kappa(phi[i,0]) + kappa(phi[i,1])) / 2
+                flow = (kappa_phi[i,0] + kappa_phi[i,1]) / 2
+                #flow = kappa_phi[i,0]
                 data = [flow/h, -flow/h]
                 row = [i, i]
                 col = [0, 1]
@@ -185,10 +197,10 @@ def A(phi, do_lagrange=True):
 
                 # Core
                 #"""
-                flow_down  = (kappa(phi[i,j]) + kappa(phi[i-1,j])) / 2
-                flow_up    = (kappa(phi[i,j]) + kappa(phi[i+1,j])) / 2
-                flow_left  = (kappa(phi[i,j]) + kappa(phi[i,j-1])) / 2
-                flow_right = (kappa(phi[i,j]) + kappa(phi[i,j+1])) / 2
+                flow_down  = (kappa_phi[i,j] + kappa_phi[i-1,j]) / 2
+                flow_up    = (kappa_phi[i,j] + kappa_phi[i+1,j]) / 2
+                flow_left  = (kappa_phi[i,j] + kappa_phi[i,j-1]) / 2
+                flow_right = (kappa_phi[i,j] + kappa_phi[i,j+1]) / 2
 
                 data = [-(flow_down + flow_up + flow_right + flow_left) / h2,\
                         flow_left / h2, \
@@ -198,11 +210,11 @@ def A(phi, do_lagrange=True):
                 #"""
 
                 """
-                data = [(-4*kappa(phi[i,j])) / h2, \
-                        (kappa(phi[i,j]) + 0.25 * kappa(phi[i, j-1]) - 0.25 * kappa(phi[i, j+1])) / h2, \
-                        (kappa(phi[i,j]) + 0.25 * kappa(phi[i, j+1]) - 0.25 * kappa(phi[i, j-1])) / h2, \
-                        (kappa(phi[i,j]) + 0.25 * kappa(phi[i-1, j]) - 0.25 * kappa(phi[i+1, j])) / h2, \
-                        (kappa(phi[i,j]) + 0.25 * kappa(phi[i+1, j]) - 0.25 * kappa(phi[i-1, j])) / h2]
+                data = [(-4*kappa_phi[i,j]) / h2, \
+                        (kappa_phi[i,j] + 0.25 * kappa_phi[i, j-1] - 0.25 * kappa_phi[i, j+1]) / h2, \
+                        (kappa_phi[i,j] + 0.25 * kappa_phi[i, j+1] - 0.25 * kappa_phi[i, j-1]) / h2, \
+                        (kappa_phi[i,j] + 0.25 * kappa_phi[i-1, j] - 0.25 * kappa_phi[i+1, j]) / h2, \
+                        (kappa_phi[i,j] + 0.25 * kappa_phi[i+1, j] - 0.25 * kappa_phi[i-1, j]) / h2]
                 """
 
                 row = [i, i, i, i-1, i+1]
@@ -210,7 +222,8 @@ def A(phi, do_lagrange=True):
 
             if j == n+1:
                 # Edge
-                flow = (kappa(phi[i, n+1]) + kappa(phi[i, n])) / 2
+                flow = (kappa_phi[i, n+1] + kappa_phi[i, n]) / 2
+                #flow = kappa_phi[i, n+1]
                 data = [flow/h, -flow/h]
                 row = [i, i]
                 col = [n+1, n]
@@ -222,7 +235,8 @@ def A(phi, do_lagrange=True):
                 col = [0, 1, 0]
             if 1 <= j and j <= n:
                 # Edge
-                flow = (kappa(phi[n+1,j]) + kappa(phi[n,j])) / 2
+                flow = (kappa_phi[n+1,j] + kappa_phi[n,j]) / 2
+                #flow = kappa_phi[n+1,j]
                 data = [flow/h, -flow/h]
                 row = [n+1, n]
                 col = [j, j]
@@ -256,11 +270,11 @@ def A(phi, do_lagrange=True):
 
     return arr
 
-def apply_A(phi, x):
-    return (A(phi, do_lagrange=False) * x.ravel()).reshape((n+2,n+2))
+def apply_A(kappa_phi, p):
+    return (A(kappa_phi, do_lagrange=False) * p.ravel()).reshape((n+2,n+2))
 
 def p(phi):
-    return pypardiso.spsolve(A(phi), s())[:-1].reshape((n+2,n+2))
+    return pypardiso.spsolve(A(kappa(phi)), s())[:-1].reshape((n+2,n+2))
 
 
 
@@ -284,6 +298,30 @@ while "itr%d" % itr_index in files:
 itr_dir = "img/itr%d" % itr_index
 os.mkdir(itr_dir)
 
+
+params = {}
+params['desc'] = "Plus Half applyA Half g start"
+params['n'] = n
+params['a'] = a
+params['b'] = b
+params['k'] = k
+params['max_t'] = max_t
+params['e0'] = e0
+params['d0'] = d0
+params['gamma'] = gamma
+params['omega'] = omega
+params['d_phi_star'] = d_phi_star
+params['e_phi_star'] = e_phi_star
+params['phi_s_min'] = phi_s_min
+params['phi_s_max'] = phi_s_max
+params['zeta'] = zeta
+params['n_blur_width'] = n_blur_width
+params['xi'] = xi
+params['max_decay'] = max_decay
+with open(itr_dir + "/params.json", "w") as outfile:
+    json.dump(params, outfile)
+
+
 def init():
     global phi_s, phi_g, phi_l, t
 
@@ -303,7 +341,10 @@ def init():
     phi_bot = np.max(phi)
 
     phi_s = phi_s_min + (phi_s_max - phi_s_min) * ((phi - phi_bot) / (phi_top - phi_bot))
-    phi_g = np.zeros_like(phi_s)
+    phi_s[:(n//2)] -= 0.10
+
+    #phi_g = np.zeros_like(phi_s)
+    phi_g = (1-phi_s)/2
     phi_l = 1-phi_s-phi_g
 
     print(np.min(phi_s), np.max(phi_s))
@@ -363,6 +404,7 @@ def update(frame):
         phi_l += k * dphi_l
 
         print("System sum:", np.sum(phi_s + phi_g + phi_l - 1))
+        print("Diff sum:", np.sum(dphi_s + dphi_g + dphi_l))
     
         t += k
     
@@ -390,7 +432,11 @@ def update(frame):
         axs[1,2].imshow(sigma(phi_s))
         axs[1,2].set_title("$\sigma$")
     
-        print(np.min(dphi_s), np.max(dphi_s), t)
+        print(t)
+        print("phi_s [%.5f, %.5f]" % (np.min(phi_s), np.max(phi_s)))
+        print("phi_g [%.5f, %.5f]" % (np.min(phi_g), np.max(phi_g)))
+        print("phi_l [%.5f, %.5f]" % (np.min(phi_l), np.max(phi_l)))
+        print()
     
         # Save plots
         if t - np.floor(t/save_interval)*save_interval < k:
