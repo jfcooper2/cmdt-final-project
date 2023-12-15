@@ -22,10 +22,10 @@ h2 = h*h
 
 k_star = 0.5 * h
 save_interval = 0.25
-max_t = 5
+max_t = 10
 
 e0 = 1.0
-d0 = 1.0
+d0 = 10.0
 gamma = 20.0
 
 omega = 2 * np.pi
@@ -34,12 +34,12 @@ e_phi_star = 0.70
 
 phi_s_min  = 0.80
 phi_s_max  = 0.90
-zeta = 0.0025 # 0.01
+zeta = 0.01 
 
 n_blur_width = 25
-xi = 0.5 # 2
+xi = 2 
 
-max_decay = 1000 # Totally a stop-gap measure (FIXED)
+#max_decay = 1000 # Totally a stop-gap measure (FIXED)
 
 source = np.zeros((n,n)) 
 #source[45:55,45:55] = 0.1
@@ -48,11 +48,15 @@ source = np.zeros((n,n))
 boundary = np.zeros((n+2,n+2))
 
 # Edges
-boundary[48:52,n+1] = -5
+#boundary[48:52,n+1] = -5
+#boundary[1:n+1,0] = 1./5
+
+boundary[0,48:52] = 5
+boundary[48:52,0] = -5
+
 #boundary[0,:] = 1./5
 #boundary[n+1,:] = 1./5
 #boundary[0,:] = -1
-boundary[:,0] = 1./5
 #boundary[n+1,:] = 1
 #boundary[:,n+1] = 2./5
 #boundary[0,48:52] = -3
@@ -133,18 +137,16 @@ def sigma(phi):
     return 0.5 * (np.tanh(omega * (other_phi - e_phi_star)) + 1)
 
 def e(phi_s, phi_g, p):
-    return phi_s * np.minimum(max_decay, e0 * np.maximum(0, dp2(p) / gamma - sigma(phi_s)))
+    return phi_s * e0 * np.maximum(0, dp2(p) / gamma - sigma(phi_s))
+    #return phi_s * np.minimum(max_decay, e0 * np.maximum(0, dp2(p) / gamma - sigma(phi_s)))
 
 def d(phi_s, phi_g, p):
-    return phi_g * np.minimum(max_decay, d0 * np.maximum(0, phi_s - d_phi_star))
+    return phi_g * d0 * np.maximum(0, phi_s - d_phi_star)
+    #return phi_g * np.minimum(max_decay, d0 * np.maximum(0, phi_s - d_phi_star))
 
 def dphi_s_dt(phi_s, phi_g, p):
     dd = d(phi_s, phi_g, p)
     ee = e(phi_s, phi_g, p)
-    #print(np.min(dd), np.max(dd))
-    #print(np.min(ee), np.max(ee))
-    #print(np.min(dp2(p)), np.max(dp2(p)))
-    #print()
 
     #ret = np.zeros_like(phi_s)
     #ret = - e(phi_s, phi_g, p)
@@ -153,7 +155,7 @@ def dphi_s_dt(phi_s, phi_g, p):
 
 def dphi_g_dt(phi_s, phi_g, p):
     phi = 1-phi_s # 1-psi_s = psi_g + psi_l
-    #ret = np.zeros_like(phi_s)
+    ret = np.zeros_like(phi_s)
     #ret = e(phi_s, phi_g, p)
     ret = e(phi_s, phi_g, p) - d(phi_s, phi_g, p)
     #ret = (e(phi_s, phi_g, p) - d(phi_s, phi_g, p)) / 2
@@ -289,6 +291,7 @@ def A(kappa_phi, do_lagrange=True):
             arr_row.append(ij2idx[i, j])
             arr_col.append(ij2idx[ii, jj])
 
+        #"""
         # Lagrange
         if do_lagrange:
             arr_data.append(1)
@@ -298,6 +301,19 @@ def A(kappa_phi, do_lagrange=True):
             arr_data.append(1)
             arr_row.append((n+2)*(n+2))
             arr_col.append(ij2idx[i,j])
+        #"""
+
+    """
+    # Lagrange
+    if do_lagrange:
+        arr_data.append(1)
+        arr_row.append(ij2idx[1,1])
+        arr_col.append((n+2)*(n+2))
+    
+        arr_data.append(1)
+        arr_row.append((n+2)*(n+2))
+        arr_col.append(ij2idx[1,1])
+    """
 
     n2 = (n+2) * (n+2)
     if do_lagrange:
@@ -317,15 +333,7 @@ def p(phi):
 
 ### ANIMATION ###
 
-fig = plt.figure()
-
-axs = np.empty((2,3), dtype=object)
-axs[0,0] = fig.add_subplot(2, 3, 1)
-axs[0,1] = fig.add_subplot(2, 3, 2)
-axs[0,2] = fig.add_subplot(2, 3, 3, projection='3d')
-axs[1,0] = fig.add_subplot(2, 3, 4)
-axs[1,1] = fig.add_subplot(2, 3, 5)
-axs[1,2] = fig.add_subplot(2, 3, 6)
+fig, ax = plt.subplots()
 
 
 itr_index = 0
@@ -354,7 +362,7 @@ params['phi_s_max'] = phi_s_max
 params['zeta'] = zeta
 params['n_blur_width'] = n_blur_width
 params['xi'] = xi
-params['max_decay'] = max_decay
+#params['max_decay'] = max_decay
 with open(itr_dir + "/params.json", "w") as outfile:
     json.dump(params, outfile)
 
@@ -391,12 +399,7 @@ def update(frame):
     global phi_s, phi_g, phi_l, t, itr_dir, itr_index
 
     for itr in range(5):
-        axs[0,0].cla()
-        axs[0,1].cla()
-        axs[0,2].cla()
-        axs[1,0].cla()
-        axs[1,1].cla()
-        axs[1,2].cla()
+        ax.cla()
     
         # RK4 Updates
         phi_s1 = phi_s
@@ -452,26 +455,8 @@ def update(frame):
         # PLOTTING #
         fig.suptitle("t = %.5f" % t)
     
-        axs[0,0].imshow(phi_s, vmin=0.2, vmax=0.9, cmap='binary')
-        axs[0,0].set_title("$\phi_s$")
-    
-        axs[0,1].imshow(s()[:-1].reshape((n+2,n+2)))
-        axs[0,1].set_title("s")
-    
-        axs[0,2].plot_surface(xs_mesh, ys_mesh, curr_p)
-        #axs[0,2].imshow(curr_p)
-        axs[0,2].set_title("$p$")
-    
-        axs[1,0].imshow(np.sqrt(dp2(curr_p)))
-        axs[1,0].set_title(r"$|\nabla p|$")
-        #axs[1,0].imshow(kappa(phi_s) * np.sqrt(dp2(curr_p)))
-        #axs[1,0].set_title(r"$|\kappa(\phi_s)\nabla p|$")
-    
-        axs[1,1].imshow(dphi_s)
-        axs[1,1].set_title("$\partial_t \phi_s$")
-    
-        axs[1,2].imshow(sigma(phi_s))
-        axs[1,2].set_title("$\sigma$")
+        ax.imshow(phi_s, vmin=0.2, vmax=0.9, cmap='binary')
+        ax.set_title("$\phi_s$")
     
         print(t)
         print("phi_s [%.5f, %.5f]" % (np.min(phi_s), np.max(phi_s)))
@@ -496,7 +481,7 @@ def update(frame):
     return fig,
 
 
-ani = anim.FuncAnimation(fig, update, init_func=init, save_count=400)
+ani = anim.FuncAnimation(fig, update, init_func=init, save_count=200)
 ani.save(itr_dir + "/anim.mp4")
 #plt.show() 
 

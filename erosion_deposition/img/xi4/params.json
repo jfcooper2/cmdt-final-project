@@ -1,0 +1,1 @@
+{"desc": "Adaptive", "n": 100, "a": 0, "b": 1, "k": 0.004901960784313725, "max_t": 10, "e0": 1.0, "d0": 10.0, "gamma": 20.0, "omega": 6.283185307179586, "d_phi_star": 0.7, "e_phi_star": 0.7, "phi_s_min": 0.8, "phi_s_max": 0.9, "zeta": 0.01, "n_blur_width": 25, "xi": 4, "max_decay": 1000}
