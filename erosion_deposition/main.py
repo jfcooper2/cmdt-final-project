@@ -14,32 +14,30 @@ import pypardiso
 
 ### PARAMETERS ###
 
-n = 100
-a, b = 0, 1
+n = 100               # Interior width
+a, b = 0, 1           # Box bounds
 
-h = 1./(n+2)
+h = 1./(n+2)          # Space-step
 h2 = h*h
 
-k_star = 0.5 * h
-save_interval = 0.25
-max_t = 10
+k_star = 0.5 * h      # Optimal time-step
+save_interval = 0.25  # How often frames should be saved
+max_t = 10            # Time at which the simulation repeats
 
-e0 = 1.0
-d0 = 10.0
-gamma = 20.0
+e0 = 1.0              # Erosion coefficient
+d0 = 10.0             # Deposition coefficient
+gamma = 20.0          # Pressure coefficient
 
-omega = 2 * np.pi
-d_phi_star = 0.70
-e_phi_star = 0.70
+omega = 2 * np.pi     # Erosion sharpness
+d_phi_star = 0.70     # Deposition threshold
+e_phi_star = 0.70     # Erosion threshold
 
-phi_s_min  = 0.80
-phi_s_max  = 0.90
-zeta = 0.01 
+phi_s_min  = 0.80     # Min initial field value
+phi_s_max  = 0.90     # Max initial field value
+zeta = 0.01           # Init correlation value
 
-n_blur_width = 25
-xi = 2 
-
-#max_decay = 1000 # Totally a stop-gap measure (FIXED)
+n_blur_width = 25     # Cell width of gaussian conv. template
+xi = 2                # Cell width of the std of gaussian conv.
 
 source = np.zeros((n,n)) 
 #source[45:55,45:55] = 0.1
@@ -51,11 +49,19 @@ boundary = np.zeros((n+2,n+2))
 #boundary[48:52,n+1] = -5
 #boundary[1:n+1,0] = 1./5
 
-boundary[0,48:52] = 5
-boundary[48:52,0] = -5
+#boundary[0,48:52] = 5
+#boundary[48:52,0] = -5
 
-#boundary[0,:] = 1./5
-#boundary[n+1,:] = 1./5
+#boundary[0,48:52] = -5
+#boundary[n+1,48:52] = -5
+boundary[0,1:n+1] = -1./5
+boundary[n+1,1:n+1] = 1./5
+
+#boundary[1:n+1,0] = -3./5
+#boundary[1:n+1,n+1] = 1./5
+#boundary[0,1:n+1] = 1./5
+#boundary[n+1,1:n+1] = 1./5
+
 #boundary[0,:] = -1
 #boundary[n+1,:] = 1
 #boundary[:,n+1] = 2./5
@@ -86,6 +92,7 @@ xs_mesh, ys_mesh = np.meshgrid(xs, ys)
 
 ### SIMULATION METHODS ###
 
+# Source term
 def s():
     global t
     s = (t / max_t) * boundary.copy()
@@ -98,7 +105,9 @@ def s():
 def kappa(phi):
     return (phi ** 3) / ((1 - phi) ** 2)
 
+# Finds \grad{p}^2
 def dp2(p):
+    # Balanced forward and backward difference
     """
     dpdx  = (p[:,2:] - p[:,1:-1]) / (h)
     dpdx *= (p[:,1:-1] - p[:,:-2]) / (h)
@@ -109,6 +118,7 @@ def dp2(p):
     dp[1:-1,:] += np.abs(dpdy)
     """
 
+    # Centered difference
     #"""
     dpdx  = (p[:,2:] - p[:,:-2]) / (2*h)
     dpdx *= (p[:,2:] - p[:,:-2]) / (2*h)
@@ -120,6 +130,7 @@ def dp2(p):
     #"""
     return dp
 
+# Breaking strength
 def sigma(phi):
     global omega
 
@@ -136,40 +147,109 @@ def sigma(phi):
 
     return 0.5 * (np.tanh(omega * (other_phi - e_phi_star)) + 1)
 
+# Erosion term
 def e(phi_s, phi_g, p):
     return phi_s * e0 * np.maximum(0, dp2(p) / gamma - sigma(phi_s))
-    #return phi_s * np.minimum(max_decay, e0 * np.maximum(0, dp2(p) / gamma - sigma(phi_s)))
 
+# Deposition term
 def d(phi_s, phi_g, p):
     return phi_g * d0 * np.maximum(0, phi_s - d_phi_star)
-    #return phi_g * np.minimum(max_decay, d0 * np.maximum(0, phi_s - d_phi_star))
 
 def dphi_s_dt(phi_s, phi_g, p):
     dd = d(phi_s, phi_g, p)
     ee = e(phi_s, phi_g, p)
 
-    #ret = np.zeros_like(phi_s)
     #ret = - e(phi_s, phi_g, p)
-    ret = d(phi_s, phi_g, p) - e(phi_s, phi_g, p)
+    ret = dd - ee
     return np.nan_to_num(ret, nan=0.0)
 
 def dphi_g_dt(phi_s, phi_g, p):
+    dd = d(phi_s, phi_g, p)
+    ee = e(phi_s, phi_g, p)
     phi = 1-phi_s # 1-psi_s = psi_g + psi_l
-    ret = np.zeros_like(phi_s)
+
+    #ret = np.zeros_like(phi_s)
     #ret = e(phi_s, phi_g, p)
-    ret = e(phi_s, phi_g, p) - d(phi_s, phi_g, p)
+    ret = ee - dd
+
     #ret = (e(phi_s, phi_g, p) - d(phi_s, phi_g, p)) / 2
     #ret = e(phi_s, phi_g, p) - d(phi_s, phi_g, p) - apply_A(kappa(phi), p)
     #ret = e(phi_s, phi_g, p) - d(phi_s, phi_g, p) + apply_A(kappa(phi), p) / 2
     #ret = e(phi_s, phi_g, p) - d(phi_s, phi_g, p) - apply_A(kappa(phi), p) / 2
     #ret = phi_g / phi * apply_A(kappa(phi), p)
     #ret = e(phi_s, phi_g, p) - d(phi_s, phi_g, p) - phi_g / phi * apply_A(kappa(phi), p)
-    #ret = e(phi_s, phi_g, p) - d(phi_s, phi_g, p) + apply_A(phi_g / phi * kappa(phi), p) / 2
+
+    # Test for adding grad components
+    ret = e(phi_s, phi_g, p) - d(phi_s, phi_g, p) + (apply_grad_div(phi_g / phi * kappa(phi), p) / 1e0)
     #ret = e(phi_s, phi_g, p) - d(phi_s, phi_g, p) - apply_A(phi_g / phi * kappa(phi), p)
+
     return np.nan_to_num(ret, nan=0.0)
 
 
+# Same as the below A, except boundaries are different
+def grad_div(kappa_phi, do_lagrange=True):
+    arr_data, arr_row, arr_col = [], [], []
 
+    for (i,j) in ij2idx.keys():
+        if i == 0 or i == n+1:   
+            flow_down = 0
+            flow_up = 0
+        else:       
+            flow_down  = (kappa_phi[i,j] + kappa_phi[i-1,j]) / 2
+            flow_up    = (kappa_phi[i,j] + kappa_phi[i+1,j]) / 2
+        if j == 0 or j == n+1:   
+            flow_left = 0
+            flow_right = 0
+        else:        
+            flow_left  = (kappa_phi[i,j] + kappa_phi[i,j-1]) / 2
+            flow_right = (kappa_phi[i,j] + kappa_phi[i,j+1]) / 2
+
+        data = [-(flow_down + flow_up + flow_right + flow_left) / h2]
+        row = [i]
+        col = [j]
+        if flow_left != 0:
+            data.append(flow_left / h2)
+            row.append(i)
+            col.append(j-1)
+        if flow_right != 0:
+            data.append(flow_right / h2)
+            row.append(i)
+            col.append(j+1)
+        if flow_down != 0:
+            data.append(flow_down / h2)
+            row.append(i-1)
+            col.append(j)
+        if flow_up != 0:
+            data.append(flow_up / h2)
+            row.append(i+1)
+            col.append(j)
+
+        # Add to array
+        arr_data.extend(data)
+        for ii, jj in zip(row, col):
+            arr_row.append(ij2idx[i, j])
+            arr_col.append(ij2idx[ii, jj])
+
+        # Lagrange
+        if do_lagrange:
+            arr_data.append(1)
+            arr_row.append(ij2idx[i,j])
+            arr_col.append((n+2)*(n+2))
+    
+            arr_data.append(1)
+            arr_row.append((n+2)*(n+2))
+            arr_col.append(ij2idx[i,j])
+
+    n2 = (n+2) * (n+2)
+    if do_lagrange:
+        n2 += 1
+    row, col, data = np.array(arr_row), np.array(arr_col), np.array(arr_data)
+    arr = csr_matrix((data, (row, col)), shape=(n2,n2))
+
+    return arr
+
+
+# Main matrix solved for the model
 def A(kappa_phi, do_lagrange=True):
     arr_data, arr_row, arr_col = [], [], []
 
@@ -182,19 +262,10 @@ def A(kappa_phi, do_lagrange=True):
                 col = [0, 1, 0]
             if 1 <= j and j <= n:
                 # Edge
-                #"""
                 flow = (kappa_phi[0,j] + kappa_phi[1,j]) / 2
                 data = [flow/h, -flow/h]
                 row = [0, 1]
                 col = [j, j]
-                #"""
-
-                """
-                flow = kappa_phi[0,j]
-                data = [-3*flow/(2*h), 4*flow/(2*h), -flow/(2*h)]
-                row = [0, 1, 2]
-                col = [j, j, j]
-                """
             if j == n+1:
                 # Corner
                 data = [-2, 1, 1]
@@ -203,23 +274,13 @@ def A(kappa_phi, do_lagrange=True):
         if 1 <= i and i <= n:
             if j == 0:
                 # Edge
-                #"""
                 flow = (kappa_phi[i,0] + kappa_phi[i,1]) / 2
                 data = [flow/h, -flow/h]
                 row = [i, i]
                 col = [0, 1]
-                #"""
-
-                """
-                flow = kappa_phi[i,0]
-                data = [-3*flow/(2*h), 4*flow/(2*h), -flow/(2*h)]
-                row = [i, i, i]
-                col = [0, 1, 2]
-                """
             if 1 <= j and j <= n:
 
                 # Core
-                #"""
                 flow_down  = (kappa_phi[i,j] + kappa_phi[i-1,j]) / 2
                 flow_up    = (kappa_phi[i,j] + kappa_phi[i+1,j]) / 2
                 flow_left  = (kappa_phi[i,j] + kappa_phi[i,j-1]) / 2
@@ -230,34 +291,16 @@ def A(kappa_phi, do_lagrange=True):
                         flow_right / h2, \
                         flow_down / h2, \
                         flow_up / h2]
-                #"""
-
-                """
-                data = [(-4*kappa_phi[i,j]) / h2, \
-                        (kappa_phi[i,j] + 0.25 * kappa_phi[i, j-1] - 0.25 * kappa_phi[i, j+1]) / h2, \
-                        (kappa_phi[i,j] + 0.25 * kappa_phi[i, j+1] - 0.25 * kappa_phi[i, j-1]) / h2, \
-                        (kappa_phi[i,j] + 0.25 * kappa_phi[i-1, j] - 0.25 * kappa_phi[i+1, j]) / h2, \
-                        (kappa_phi[i,j] + 0.25 * kappa_phi[i+1, j] - 0.25 * kappa_phi[i-1, j]) / h2]
-                """
 
                 row = [i, i, i, i-1, i+1]
                 col = [j, j-1, j+1, j, j]
 
             if j == n+1:
                 # Edge
-                #"""
                 flow = (kappa_phi[i, n+1] + kappa_phi[i, n]) / 2
                 data = [flow/h, -flow/h]
                 row = [i, i]
                 col = [n+1, n]
-                #"""
-
-                """
-                flow = kappa_phi[i,n+1]
-                data = [-3*flow/(2*h), 4*flow/(2*h), -flow/(2*h)]
-                row = [i, i, i]
-                col = [n+1, n, n-1]
-                """
         if i == n+1:
             if j == 0:
                 # Corner
@@ -266,19 +309,10 @@ def A(kappa_phi, do_lagrange=True):
                 col = [0, 1, 0]
             if 1 <= j and j <= n:
                 # Edge
-                #"""
                 flow = (kappa_phi[n+1,j] + kappa_phi[n,j]) / 2
                 data = [flow/h, -flow/h]
                 row = [n+1, n]
                 col = [j, j]
-                #"""
-
-                """
-                flow = kappa_phi[n+1,j]
-                data = [-3*flow/(2*h), 4*flow/(2*h), -flow/(2*h)]
-                row = [n+1, n, n-1]
-                col = [j, j, j]
-                """
             if j == n+1:
                 # Corner
                 data = [-2, 1, 1]
@@ -291,7 +325,6 @@ def A(kappa_phi, do_lagrange=True):
             arr_row.append(ij2idx[i, j])
             arr_col.append(ij2idx[ii, jj])
 
-        #"""
         # Lagrange
         if do_lagrange:
             arr_data.append(1)
@@ -301,19 +334,6 @@ def A(kappa_phi, do_lagrange=True):
             arr_data.append(1)
             arr_row.append((n+2)*(n+2))
             arr_col.append(ij2idx[i,j])
-        #"""
-
-    """
-    # Lagrange
-    if do_lagrange:
-        arr_data.append(1)
-        arr_row.append(ij2idx[1,1])
-        arr_col.append((n+2)*(n+2))
-    
-        arr_data.append(1)
-        arr_row.append((n+2)*(n+2))
-        arr_col.append(ij2idx[1,1])
-    """
 
     n2 = (n+2) * (n+2)
     if do_lagrange:
@@ -323,9 +343,14 @@ def A(kappa_phi, do_lagrange=True):
 
     return arr
 
+
 def apply_A(kappa_phi, p):
     return (A(kappa_phi, do_lagrange=False) * p.ravel()).reshape((n+2,n+2))
 
+def apply_grad_div(kappa_phi, p):
+    return (grad_div(kappa_phi, do_lagrange=False) * p.ravel()).reshape((n+2,n+2)) + boundary
+
+# Solves the discretized system
 def p(phi):
     return pypardiso.spsolve(A(kappa(phi)), s())[:-1].reshape((n+2,n+2))
 
@@ -335,7 +360,7 @@ def p(phi):
 
 fig, ax = plt.subplots()
 
-
+# Find a free directory name
 itr_index = 0
 files = os.listdir("img")
 while "itr%d" % itr_index in files:
@@ -343,7 +368,7 @@ while "itr%d" % itr_index in files:
 itr_dir = "img/itr%d" % itr_index
 os.mkdir(itr_dir)
 
-
+# Save the parameters
 params = {}
 params['desc'] = "Adaptive"
 params['n'] = n
@@ -372,6 +397,7 @@ def init():
 
     t = 0
 
+    # Create initial gaussian field
     phi = np.zeros((n+2,n+2))
     for itr in range(int(n*n)):
         xs = h * np.arange(n+2)
@@ -385,14 +411,13 @@ def init():
     phi_top = np.min(phi)
     phi_bot = np.max(phi)
 
+    # Find each particle fraction
     phi_s = phi_s_min + (phi_s_max - phi_s_min) * ((phi - phi_bot) / (phi_top - phi_bot))
     #phi_s[:(n//2)] -= 0.10
 
     phi_g = np.zeros_like(phi_s)
     #phi_g = (1-phi_s)/2
     phi_l = 1-phi_s-phi_g
-
-    print(np.min(phi_s), np.max(phi_s))
 
 
 def update(frame):
@@ -409,7 +434,11 @@ def update(frame):
         k_s1 = dphi_s_dt(phi_s1, phi_g1, curr_p)
         k_g1 = dphi_g_dt(phi_s1, phi_g1, curr_p)
         k_l1 = -k_s1-k_g1
-        k = min([k_star, 0.2 * np.min(np.abs(phi_s1 / k_s1)), 0.2 * np.min(np.abs(phi_g1 / k_g1)), 0.2 * np.min(np.abs(phi_l1 / k_l1))])
+
+        # Crude adaptive timesteping
+        # Helps find if issues are inherent to the system or from some bug
+        k = k_star
+        #k = min([k_star, 0.2 * np.min(np.abs(phi_s1 / k_s1)), 0.2 * np.min(np.abs(phi_g1 / k_g1)), 0.2 * np.min(np.abs(phi_l1 / k_l1))])
         #k = min([k_star, 0.01 / np.max(np.abs(k_s1)), 0.01 / np.max(np.abs(k_g1)), 0.01 / np.max(np.abs(k_l1))])
         if k == k_star: print("At fastest")
         else: print("---------------------------------------------------")
@@ -447,8 +476,8 @@ def update(frame):
         phi_g += k * dphi_g
         phi_l += k * dphi_l
 
-        print("System sum:", np.sum(phi_s + phi_g + phi_l - 1))
-        print("Diff sum:", np.sum(dphi_s + dphi_g + dphi_l))
+        #print("System sum:", np.sum(phi_s + phi_g + phi_l - 1))
+        #print("Diff sum:", np.sum(dphi_s + dphi_g + dphi_l))
     
         t += k
     
@@ -458,10 +487,10 @@ def update(frame):
         ax.imshow(phi_s, vmin=0.2, vmax=0.9, cmap='binary')
         ax.set_title("$\phi_s$")
     
-        print(t)
-        print("phi_s [%.5f, %.5f]" % (np.min(phi_s), np.max(phi_s)))
-        print("phi_g [%.5f, %.5f]" % (np.min(phi_g), np.max(phi_g)))
-        print("phi_l [%.5f, %.5f]" % (np.min(phi_l), np.max(phi_l)))
+        print("t:", t)
+        print("phi_s range: [%.5f, %.5f]" % (np.min(phi_s), np.max(phi_s)))
+        print("phi_g range: [%.5f, %.5f]" % (np.min(phi_g), np.max(phi_g)))
+        print("phi_l range: [%.5f, %.5f]" % (np.min(phi_l), np.max(phi_l)))
         print()
     
         # Save plots
