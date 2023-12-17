@@ -352,6 +352,7 @@ def apply_grad_div(kappa_phi, p):
 
 # Solves the discretized system
 def p(phi):
+    # pyparadiso is a GPU-based linear solver. Scipy was too slow
     return pypardiso.spsolve(A(kappa(phi)), s())[:-1].reshape((n+2,n+2))
 
 
